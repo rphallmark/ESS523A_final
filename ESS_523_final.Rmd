@@ -1,0 +1,182 @@
+---
+title: "ESS523A_final"
+author: "Rachel Hallmark"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Evaluating data from NEON sites simulated as C3 grasslands in the Community Land Model Version 5 
+
+The purpose of this R markdown report is to compare data from two different NEON grassland sites. I will identify a variable of interest and then extract that variable from daily data collected every day for 4 years. Then I will plot the data over time.  
+
+## Load Libraries 
+
+Load libraries required for this project
+```{r}
+
+library(tidyverse)
+library(ncdf4)
+```
+
+## Read in files and identify variables
+
+Read in files for transient simulations from each site to identify variables of interest. 
+```{r, results='hide'}
+# open a file from one month for each site 
+
+CPERjan2018 <- nc_open("simulation_data/CPER/CPER.C3mod/hist/CPER.C3mod.transient.clm2.h1.2018-01-01-00000.nc")
+DSNYjan2018 <- nc_open("simulation_data/DSNY/DSNY.C3mod/hist/DSNY.C3mod.transient.clm2.h1.2018-01-01-00000.nc")
+
+# view metadata - files are in netcdf format, so the metadata describes the data - want to identify names and units for variables of interest 
+print(CPERjan2018)
+print(DSNYjan2018)
+
+```
+
+## Explore GPP 
+
+After viewing metadata, we want to look at the gross primary productivity variable, called "GPP" in units gC/m^2/s
+
+```{r, results='hide'}
+# name the variable as an object 
+gpp <- "GPP"
+
+# get gpp variable from both objects - this is an exploratory step to check and make sure we get a value. This is extracting data from a daily data file, so we should get 48 values - values are calculated every 30 minutes 
+ncvar_get(CPERjan2018, gpp)
+ncvar_get(DSNYjan2018, gpp) 
+
+
+
+```
+
+## Develop functions to get GPP from each daily data file for each site 
+
+Now that we know which variable we want to explore, we need to get this variable from all of the daily data files. To do this - write two different functions, one to create a list of all the daily data files, and another to extract GPP from each daily data files. Then write these two functions into one single function that will do both tasks for each given site. 
+
+```{r}
+
+
+# write a function to make a list of all the files we want to get variables from 
+
+site_list <- function(site) { 
+
+  file_directory <- paste0(
+   "simulation_data/",site,"/",site,".C3mod/hist"
+   ) # points to directory 
+  
+  file_list <- list.files(file_directory, 
+    pattern =   paste0(site,".C3mod.transient.clm2.h1.*.nc$"),     full.names = T) # creates a list of files with a defined pattern 
+
+  return(file_list)
+  
+}
+
+# write a function to extract and average the variable from each file 
+
+get_avg_gpp <- function(y) {
+  
+  day <- nc_open(y) # opens a file and names it 'day'
+    
+  mean <- day %>% 
+      ncvar_get(gpp) %>% 
+    mean() # finds the mean of the gpp variable (defined earlier) for each 'day' file
+  
+    nc_close(day) 
+    return(mean)
+}
+
+# put those two functions in a function that will perform both functions for each site given as an argument 
+
+get_gpp <- 
+  function(site) { 
+    
+  files <- site_list(site) 
+  
+  monthly_gpp <- map(files, get_avg_gpp)
+  
+  return(monthly_gpp)
+ 
+  }
+
+site <- c("CPER", "DSNY") # write sites into a character vector
+
+sites_gpp <- map(site, get_gpp) # map over function for site list - returns a list with as many items that were provided as arguments, so 2 in this case 
+
+names(sites_gpp) <- site # match site names with the names of list items
+
+```
+
+## Write function output into a data frame 
+
+The output of that function gave a list, but we want these values in a data frame. 
+
+```{r}
+# write list into a data frame 
+  # lists in sites_gpp are different lengths, so need to find the max length 
+  max_length <- max(lengths(sites_gpp))
+  # pad shorter list with NA values to match the longer list 
+  sites_gpp_padded <-  map(sites_gpp, ~ c(.x, rep(NA, max_length - length(.x))))
+  
+# write lists into a dataframe 
+  sites_gpp_df <- as_tibble(sites_gpp_padded)
+```
+
+
+## Make a list of days to match with daily data output 
+
+Now we have a data frame with GPP values from each site, so we now need to match each value with the day it's from. 
+
+```{r}
+#make a list of days to match the number of rows in the data frame
+Days <- seq(as.Date("2018-01-01"), by = "days", length.out = 1521)
+head(Days) # check structure of the list 
+
+# create a new column in sites_gpp_df for the day list 
+sites_daily_gpp_df <- tibble(DAY = Days, sites_gpp_df)
+
+# remove rows containing NA 
+sites_daily_gpp_df <- na.omit(sites_daily_gpp_df)
+
+#write into a csv 
+write_csv(sites_daily_gpp_df, "CPER_DSNY_C3mod_GPP.csv")
+
+```
+
+## Tidy Data and Plot 
+
+Now we have extracted the variable of interest from simulation data, lets visually compare the data from the two sites. 
+
+```{r, warning=FALSE}
+
+# pivot longer to get into correct format to plot 
+sites_daily_gpp_long <- sites_daily_gpp_df %>%
+  pivot_longer(cols = - DAY, 
+               names_to = "site", 
+               values_to = "Daily_GPP") %>% 
+  mutate(Daily_GPP = unlist(Daily_GPP) %>% as.numeric())
+
+head(sites_daily_gpp_long)
+
+# write long data frame into a csv 
+write_csv(sites_daily_gpp_long, "CPER_DSNY_C3mod_longDF.csv")
+
+
+ggplot(data = sites_daily_gpp_long) + 
+  geom_line(aes(x = DAY, y = Daily_GPP, colour = site)) + 
+  labs(y = "daily gross primary productivity 
+       (gC/m^2/s)", 
+       x = "year", 
+       title = "Simulated Daily GPP of NEON C3 grassland sites in CLM5") + 
+  theme(plot.title = element_text(size = 10, hjust = 0.3),
+        axis.title.y = element_text(size = 10))
+  
+```
+
+It looks like GPP at the CPER site gets much lower than GPP at the DSNY site. This makes sense because the CPER site is located in Colorado, whereas the DSNY site is located in Florida. Grasses in Colorado may die off in the winter and not photosynthesize, whereas grasses in Florida are likely able to photosynthesize year round due to the milder climate. Despite being simulated as the same type of grass, the GPP between the two sites looks to have a different phenology. 
+
+
+
