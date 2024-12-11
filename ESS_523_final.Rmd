@@ -13,7 +13,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 The purpose of this R markdown report is to compare data from two different NEON grassland sites. I will identify a variable of interest and then extract that variable from daily data collected every day for 4 years. Then I will plot the data over time.  
 
-## Load Libraries 
+## Read in and evaluate simulated data
+
+### Load Libraries 
 
 Load libraries required for this project
 ```{r}
@@ -22,7 +24,7 @@ library(tidyverse)
 library(ncdf4)
 ```
 
-## Read in files and identify variables
+### Read in files and identify variables
 
 Read in files for transient simulations from each site to identify variables of interest. 
 ```{r, results='hide'}
@@ -37,7 +39,7 @@ print(DSNYjan2018)
 
 ```
 
-## Explore GPP 
+### Explore GPP 
 
 After viewing metadata, we want to look at the gross primary productivity variable, called "GPP" in units gC/m^2/s
 
@@ -53,7 +55,7 @@ ncvar_get(DSNYjan2018, gpp)
 
 ```
 
-## Develop functions to get GPP from each daily data file for each site 
+### Develop functions to get GPP from each daily data file for each site 
 
 Now that we know which variable we want to explore, we need to get this variable from all of the daily data files. To do this - write two different functions, one to create a list of all the daily data files, and another to extract GPP from each daily data files. Then write these two functions into one single function that will do both tasks for each given site. 
 
@@ -110,7 +112,7 @@ names(sites_gpp) <- site # match site names with the names of list items
 
 ```
 
-## Write function output into a data frame 
+### Write function output into a data frame 
 
 The output of that function gave a list, but we want these values in a data frame. 
 
@@ -126,7 +128,7 @@ The output of that function gave a list, but we want these values in a data fram
 ```
 
 
-## Make a list of days to match with daily data output 
+### Make a list of days to match with daily data output 
 
 Now we have a data frame with GPP values from each site, so we now need to match each value with the day it's from. 
 
@@ -146,7 +148,7 @@ write_csv(sites_daily_gpp_df, "CPER_DSNY_C3mod_GPP.csv")
 
 ```
 
-## Tidy Data and Plot 
+### Tidy Data and Plot 
 
 Now we have extracted the variable of interest from simulation data, lets visually compare the data from the two sites. 
 
@@ -178,7 +180,112 @@ ggplot(data = sites_daily_gpp_long) +
 
 It looks like GPP at the CPER site gets much lower than GPP at the DSNY site. This makes sense because the CPER site is located in Colorado, whereas the DSNY site is located in Florida. Grasses in Colorado may die off in the winter and not photosynthesize, whereas grasses in Florida are likely able to photosynthesize year round due to the milder climate. Despite being simulated as the same type of grass, the GPP between the two sites looks to have a different phenology. 
 
+## Compare simulated data to observed data 
 
+### Read in and tidy observed data 
+Let's now compare the simulations to observed data collected by NEON for each site 
 
+```{r, results='hide'}
+# read in the data 
 
+CPER_observed <- read_csv("CPER_GPP_NEON_data.csv")
+
+DSNY_observed <- read_csv("DSNY_GPP_NEON_data.csv")
+
+# view data 
+head(CPER_observed) # it looks like units for GPP values are different than in the simulations - these are in gC/m^2/day whereas our simulations were in seconds
+
+# merge two data frames before doing unit conversions 
+
+  #rename columns before merging 
+CPER_observed <- CPER_observed %>% 
+  rename(CPER_GPP = NEON)
+
+DSNY_observed <- DSNY_observed %>% 
+  rename(DSNY_GPP = NEON)
+
+# merge data frames 
+NEON_GPP <- full_join(CPER_observed, DSNY_observed, by = "time") %>% 
+  select(CPER_GPP, DSNY_GPP, time) %>% 
+  # delete unwanted columns 
+  pivot_longer(cols = -time, names_to = "site", values_to = "GPP") %>% 
+  mutate(GPP = (GPP/864000)) %>% # want GPP in units per second to match our other data frame
+  mutate(time = as.Date(time)) %>% 
+  rename(DAY = time) %>% 
+  mutate(site = paste0(site,"_NEON")) %>% 
+  mutate(site = gsub("_GPP","",site))
+
+```
+
+### Load simulated data and join with observed data 
+
+Read in the data frame developed earlier for the simulated data and join with the data frame just created for observed data
+```{r}
+simulated_GPP <- read_csv("CPER_DSNY_C3mod_longDF.csv") %>% 
+  mutate(site = paste0(site, "_C3")) %>% 
+  mutate(GPP = Daily_GPP) %>% 
+  select(- Daily_GPP)
+
+NEON_sim_data <- bind_rows(simulated_GPP, NEON_GPP)
+  
+```
+
+### Plot observed data compared to simulated data 
+```{r}
+
+NEON_sim_data %>% 
+  ggplot(aes(x = DAY, y = GPP)) + 
+  geom_line(aes(colour = site)) + 
+  labs(y = "daily gross primary productivity 
+       (gC/m^2/s)", 
+       x = "year", 
+       title = "Daily GPP of NEON C3 simulated grasslands 
+       compared to observed NEON data")
+  
+```
+
+Wow! It looks like those NEON sites are missing a lot of observed data. Let's compare the C3 simulations to the standard C4 simulations. 
+
+## Compare C3 simulations to C4 simulations 
+
+```{r}
+# standard C4 simulation data is found in the same file as the NEON data 
+
+DSNY_C4_GPP <- read_csv("DSNY_GPP_NEON_data.csv")
+
+CPER_C4_GPP <- read_csv("CPER_GPP_NEON_data.csv")
+
+# rename before merging 
+DSNY_C4_GPP <- DSNY_C4_GPP %>% 
+  rename(DSNY_GPP = CLM)
+
+CPER_C4_GPP <- CPER_C4_GPP %>% 
+  rename(CPER_GPP = CLM)
+
+#merge
+
+C4_simulation <- full_join(CPER_C4_GPP, DSNY_C4_GPP, by = "time") %>% 
+  select(time, CPER_GPP, DSNY_GPP) %>% 
+  mutate(DAY = time) %>% 
+  mutate(DAY = as.Date(DAY)) %>% 
+  select(- time) %>% 
+  mutate(DSNY_GPP = (DSNY_GPP/86400), CPER_GPP = (CPER_GPP/86400)) %>% 
+  rename(CPER_C4 = CPER_GPP, DSNY_C4 = DSNY_GPP) %>% 
+  pivot_longer(cols = -DAY, names_to = "site", values_to = "GPP")
+
+C4_C3_df <- bind_rows(simulated_GPP, C4_simulation)
+```
+
+### Plot 
+
+```{r}
+C4_C3_df %>% 
+  ggplot(aes(x = DAY, y = GPP)) + 
+  geom_line(aes(colour = site), alpha = 0.7) + 
+  labs(y = "daily gross primary productivity 
+       (gC/m^2/s)", 
+       x = "year", 
+       title = "Daily GPP of NEON C3 simulated grasslands 
+       compared to NEON C4 simulated grasslands")
+```
 
